@@ -1,6 +1,3 @@
 {
-  "functions": [ 
-    "GetToken"
-  ],
   "functionTimeout": "00:01:00"
 }
