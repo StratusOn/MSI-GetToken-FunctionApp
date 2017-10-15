@@ -106,7 +106,7 @@
     "outputs": {
         "getDefaultTokenEndpoint": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken&code=')]"
+            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?code=')]"
         },
         "getAMSTokenEndpoint": {
             "type": "string",
