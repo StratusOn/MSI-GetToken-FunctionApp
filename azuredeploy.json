@@ -15,7 +15,7 @@
         "storageAccountName": "[concat('stor',uniqueString(resourceGroup().id))]",
         "hostingPlanName": "[concat('plan',uniqueString(resourceGroup().id))]",
         "msiGetTokenRepoUrl": "https://github.com/StratusOn/MSI-GetToken-FunctionApp.git",
-        "msiGetTokenRepoBranch": "master",
+        "msiGetTokenRepoBranch": "SimpleExample",
         "storageApiVersion": "2015-05-01-preview",
         "appServiceApiVersion": "2016-03-01",
         "hostingPlanApiVersion": "2015-04-01",
