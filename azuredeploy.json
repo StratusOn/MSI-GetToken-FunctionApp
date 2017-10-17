@@ -8,18 +8,25 @@
         },
         "functionAppName": {
             "type": "string",
-            "defaultValue": "[concat('func',uniqueString(resourceGroup().id))]"
+            "defaultValue": "[concat('func',uniqueString(resourceGroup().id, deployment().name))]"
         }
     },
     "variables": {
-        "storageAccountName": "[concat('stor',uniqueString(resourceGroup().id))]",
-        "hostingPlanName": "[concat('plan',uniqueString(resourceGroup().id))]",
+        "uniqueSuffix": "[uniqueString(resourceGroup().id, deployment().name)]",
+        "storageAccountName": "[concat('stor', variables('uniqueSuffix'))]",
+        "hostingPlanName": "[concat('plan', variables('uniqueSuffix'))]",
+        "functionAppCustomFunctionKey": "[base64(uniqueString(variables('uniqueSuffix'), guid(resourceGroup().id, deployment().name)))]",
+        "roleAssignmentId": "[guid(resourceGroup().id, deployment().name)]",
         "msiGetTokenRepoUrl": "https://github.com/StratusOn/MSI-GetToken-FunctionApp.git",
+        "ownerRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635')]",
+        "contributorRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
+        "functionAppIdentityResourceId" : "[concat(resourceId('Microsoft.Web/sites', parameters('functionAppName')),'/providers/Microsoft.ManagedIdentity/Identities/default')]",
         "msiGetTokenRepoBranch": "master",
-        "storageApiVersion": "2015-05-01-preview",
-        "appServiceApiVersion": "2016-03-01",
-        "hostingPlanApiVersion": "2015-04-01",
-        "deploymentApiVersion": "2016-09-01"
+        "storageApiVersion": "2016-12-01",
+        "appServiceApiVersion": "2016-08-01",
+        "hostingPlanApiVersion": "2016-09-01",
+        "roleAssignmentsApiVersion":"2016-07-01",
+        "msiApiVersion": "2015-08-31-PREVIEW"
     },
     "resources": [
         {
@@ -27,8 +34,9 @@
             "type": "Microsoft.Storage/storageAccounts",
             "name": "[variables('storageAccountName')]",
             "location": "[parameters('location')]",
-            "properties": {
-                "accountType": "Standard_LRS"
+            "kind": "Storage",
+            "sku": {
+                "name": "Standard_LRS"
             }
         },
         {
@@ -38,8 +46,15 @@
             "location": "[parameters('location')]",
             "properties": {
                 "name": "[variables('hostingPlanName')]",
-                "computeMode": "Dynamic",
-                "sku": "Dynamic"
+                "computeMode": "Shared",
+                "kind": "functionapp"
+            },
+            "sku": {
+              "name": "Y1",
+              "tier": "Dynamic",
+              "size": "Y1",
+              "family": "Y",
+              "capacity": 0
             }
         },
         {
@@ -62,11 +77,11 @@
                     "appSettings": [
                         {
                             "name": "AzureWebJobsDashboard",
-                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).key1)]"
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).keys[0].value)]"
                         },
                         {
                             "name": "AzureWebJobsStorage",
-                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).key1)]"
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).keys[0].value)]"
                         },
                         {
                             "name": "FUNCTIONS_EXTENSION_VERSION",
@@ -74,15 +89,27 @@
                         },
                         {
                             "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
-                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).key1)]"
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).keys[0].value)]"
                         },
                         {
                             "name": "WEBSITE_CONTENTSHARE",
-                            "value": "[concat(toLower(parameters('functionAppName')), 'ab20171001cd')]"
+                            "value": "[concat(toLower(parameters('functionAppName')), '6d6f6a616c6c')]"
                         },
                         {
                             "name": "WEBSITE_NODE_DEFAULT_VERSION",
                             "value": "6.5.0"
+                        },
+                        {
+                            "name": "IS_FUNCTION_APP_INITIALIZED",
+                            "value": "0"
+                        },
+                        {
+                            "name": "FUNCTION_APP_CUSTOM_FUNCTION_KEY",
+                            "value": "[variables('functionAppCustomFunctionKey')]"
+                        },
+                        {
+                            "name": "PUBLISH_XML_URL",
+                            "value": "[concat('https://management.azure.com/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Web/sites/', parameters('functionAppName'), '/publishxml?api-version=', variables('appServiceApiVersion'))]"
                         }
                     ]
                 },
@@ -101,24 +128,37 @@
                     "IsManualIntegration": true
                 }
             }]
-        }
+        },
+        {
+            "apiVersion": "[variables('roleAssignmentsApiVersion')]",
+            "name": "[variables('roleAssignmentId')]",
+            "type": "Microsoft.Authorization/roleAssignments",
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/Sites', parameters('functionAppName'))]"
+            ],
+            "properties": {
+              "roleDefinitionId": "[variables('ownerRoleDefinitionId')]",
+              "principalId": "[reference(variables('functionAppIdentityResourceId'), variables('msiApiVersion')).principalId]",
+              "scope": "[resourceGroup().id]"
+            }
+          }
     ],
     "outputs": {
         "getDefaultTokenEndpoint": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?code=')]"
+            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?code=', variables('functionAppCustomFunctionKey'))]"
         },
         "getAMSTokenEndpoint": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?msiresource=https://rest.media.azure.net&code=')]"
+            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?msiresource=https://rest.media.azure.net&code=', variables('functionAppCustomFunctionKey'))]"
         },
         "getDefaultTokenEndpointWithDetails": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?showdetails&code=')]"
+            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?showdetails&code=', variables('functionAppCustomFunctionKey'))]"
         },
         "getAMSTokenEndpointWithDetails": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?msiresource=https://rest.media.azure.net&showdetails&code=')]"
+            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?msiresource=https://rest.media.azure.net&showdetails&code=', variables('functionAppCustomFunctionKey'))]"
         }
     }
 }
