@@ -12,7 +12,7 @@ After deploying this function app finishes, navigate to the deployment log on th
 * 2 sample tests for getting a token for use with Azure Resource Manager (ARM) resources (https://management.azure.com/). One sample returns just the access token (valid for 1 hour) and the second sample returns the full token record (access token, expiration, etc...).
 * 2 sample tests for getting a token for use with Azure Media Services (AMS) resources (https://rest.media.azure.net). One sample returns just the access token (valid for 1 hour) and the second sample returns the full token record (access token, expiration, etc...).
 
-## A Visual Walkthrough of the Deployment and Use
+# A Visual Walkthrough of the Deployment and Use
 
 1. **Upon clicking on the 'Deploy to Azure' button, you are taken to the Azure Portal where the ARM deployment template is loaded into the Custom Template tool.**
 
