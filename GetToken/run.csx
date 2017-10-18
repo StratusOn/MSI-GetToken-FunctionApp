@@ -51,6 +51,21 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
     string functionAppFolder = context.FunctionDirectory;
     log.Info($"Function App Folder={functionAppFolder}");
 
+    // Make sure that the function is being called with a valid function key.
+    // This is only required for the first call when the function auth level is still anonymous.
+    // For subsequent calls, the function runtime will take care of validation as the auth level
+    // would have been changed to 'funtion' at that time.
+    // This is also a backup to prevent accidentally setting the auth level to anonymous of exposing this endpoint.
+    string functionKey = ConfigurationManager.AppSettings["FUNCTION_APP_CUSTOM_FUNCTION_KEY"];
+    string codeParameter = req.GetQueryNameValuePairs().FirstOrDefault(q => string.Compare(q.Key, "code", true) == 0).Value;
+    if (string.IsNullOrWhiteSpace(codeParameter) || string.CompareOrdinal(codeParameter, functionKey) != 0)
+    {
+        log.Info($"Function App is being called with an invalid 'code' parameter. Returning 401 (Unauthorized).");
+
+        // Return 401 with no message to simulate the function runtime behavior.
+        return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+    }
+
     // Validate that MSI is enabled.
     string msiEndpoint = Environment.GetEnvironmentVariable("MSI_ENDPOINT");
     string msiSecret = Environment.GetEnvironmentVariable("MSI_SECRET");
@@ -75,10 +90,20 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
     {
         try
         {
+            // Make sure the function key was specified by the deployment.
+            if (string.IsNullOrWhiteSpace(functionKey))
+            {
+                return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent("Initialization failed. Function key app setting was not found. Check the function deployment script.", Encoding.UTF8, "application/json")
+                };
+            }
+            //log.Info($"Function Key={functionKey}");
+
             string token = await GetToken(DefaultResource, MsiApiVersion, msiEndpoint, msiSecret, log);
             string accessToken = JsonConvert.DeserializeObject<Token>(token).access_token;
 
-            bool initialized = await Initialize(accessToken, functionAppFolder, log);
+            bool initialized = await Initialize(accessToken, functionKey, functionAppFolder, log);
             log.Info("Initialization finished successfully.");
         }
         catch (Exception ex)
@@ -171,22 +196,16 @@ public static async Task<string> GetToken(string resource, string apiversion, st
 // - Initializes the function app with a function key supplied in the FUNCTION_APP_CUSTOM_FUNCTION_KEY app setting and changes the auth level from anonymous to function.
 // - This is used when it is desired to provide a GetToken endpoint protected by function auth level with the function code supplied by the ARM deployment template.
 // - If finally sets the IS_FUNCTION_APP_INITIALIZED app setting to "1".
-public static async Task<bool> Initialize(string authorizationToken, string functionAppFolder, TraceWriter log)
+public static async Task<bool> Initialize(string authorizationToken, string functionKey, string functionAppFolder, TraceWriter log)
 {
     string functionAppName = Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME");
     string functionAppHostName = $"{functionAppName}.azurewebsites.net";
     string functionAppKuduHostName = $"{functionAppName}.scm.azurewebsites.net";
     string functionName = "GetToken";
     string keyName = $"{functionName}{new Random().Next(100000, 999999)}";
-    string functionKey = ConfigurationManager.AppSettings["FUNCTION_APP_CUSTOM_FUNCTION_KEY"];
-    if (string.IsNullOrWhiteSpace(functionKey))
-    {
-        throw new Exception($"Initialization failed. Function key app setting was not found. Check the function deployment script.");
-    }
 
     log.Info($"Function App Host Name={functionAppHostName}");
     log.Info($"Function App Kudu Host Name={functionAppKuduHostName}");
-    //log.Info($"Function Key={functionKey}");
 
     // Get publishing credentials from the publish XML:
     string publishXmlUrl = ConfigurationManager.AppSettings["PUBLISH_XML_URL"];
