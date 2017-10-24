@@ -20,15 +20,6 @@
 * Background:
   To enable MSI on the Function App:
   https://docs.microsoft.com/en-us/azure/app-service/app-service-managed-service-identity
-
-* How It Works
-  1) The first time the GetToken function is called, it inspects the IS_FUNCTION_APP_INITIALIZED app setting. If it is "0", then
-     it performs the initialization logic to create a function key whose value is already provided in the FUNCTION_APP_CUSTOM_FUNCTION_KEY
-     app setting.
-  2) It makes sure to change the authLevel in function.json to "function".
-  3) It sets the IS_FUNCTION_APP_INITIALIZED app setting to "1" to prevent future initialization.
-  4) On every subsequent call to the function, it checks if the auth level is anonymous. If it is, the call fails until someone changes
-     the auth level to 'function' or 'admin'.
 */
 
 #r "Newtonsoft.Json"
@@ -48,22 +39,11 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
 {
     log.Info("GetToken C# HTTP trigger function processed a request.");
 
-    string functionAppFolder = context.FunctionDirectory;
-    log.Info($"Function App Folder={functionAppFolder}");
-
-    // Make sure that the function is being called with a valid function key.
-    // This is only required for the first call when the function auth level is still anonymous.
-    // For subsequent calls, the function runtime will take care of validation as the auth level
-    // would have been changed to 'funtion' at that time.
-    // This is also a backup to prevent accidentally setting the auth level to anonymous of exposing this endpoint.
-    string functionKey = ConfigurationManager.AppSettings["FUNCTION_APP_CUSTOM_FUNCTION_KEY"];
-    string codeParameter = req.GetQueryNameValuePairs().FirstOrDefault(q => string.Compare(q.Key, "code", true) == 0).Value;
-    if (string.IsNullOrWhiteSpace(codeParameter) || string.CompareOrdinal(codeParameter, functionKey) != 0)
+    // Do nothing if this a warmup call.
+    if (req.GetQueryNameValuePairs().Any(q => string.Compare(q.Key, "iswarmup", true) == 0))
     {
-        log.Info($"Function App is being called with an invalid 'code' parameter. Returning 401 (Unauthorized).");
-
-        // Return 401 with no message to simulate the function runtime behavior.
-        return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        log.Info("Processed a warmup request.");
+        return new HttpResponseMessage(HttpStatusCode.OK);
     }
 
     // Validate that MSI is enabled.
@@ -74,58 +54,6 @@ public static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceW
         return new HttpResponseMessage(HttpStatusCode.BadRequest)
         {
             Content = new StringContent("MSI is not enabled. If MSI was just enabled, make sure to restart the function before trying again.", Encoding.UTF8, "application/json")
-        };
-    }
-
-    // Check is the function needs initialization:
-    string isInitializedFlag = ConfigurationManager.AppSettings["IS_FUNCTION_APP_INITIALIZED"];
-    if (string.IsNullOrWhiteSpace(isInitializedFlag))
-    {
-        return new HttpResponseMessage(HttpStatusCode.BadRequest)
-        {
-            Content = new StringContent($"Failed to initialize function. Initialization flag not found. Check the function deployment script.", Encoding.UTF8, "application/json")
-        };
-    }
-    else if (isInitializedFlag == "0")
-    {
-        try
-        {
-            // Make sure the function key was specified by the deployment.
-            if (string.IsNullOrWhiteSpace(functionKey))
-            {
-                return new HttpResponseMessage(HttpStatusCode.BadRequest)
-                {
-                    Content = new StringContent("Initialization failed. Function key app setting was not found. Check the function deployment script.", Encoding.UTF8, "application/json")
-                };
-            }
-            //log.Info($"Function Key={functionKey}");
-
-            string token = await GetToken(DefaultResource, MsiApiVersion, msiEndpoint, msiSecret, log);
-            string accessToken = JsonConvert.DeserializeObject<Token>(token).access_token;
-
-            bool initialized = await Initialize(accessToken, functionKey, functionAppFolder, log);
-            log.Info("Initialization finished successfully.");
-        }
-        catch (Exception ex)
-        {
-            return new HttpResponseMessage(HttpStatusCode.BadRequest)
-            {
-                Content = new StringContent($"Failed to initialize function. Exception: {ex.Message}", Encoding.UTF8, "application/json")
-            };
-        }
-    }
-    else
-    {
-        log.Info("Function app is already initialized.");
-    }
-
-    // Ensure that the auth level is not anonymous before proceeding. Fail if it is.
-    bool isAnonymousAuthLevel = IsAnonymousFunctionAuthLevel(functionAppFolder, log);
-    if (isAnonymousAuthLevel)
-    {
-        return new HttpResponseMessage(HttpStatusCode.BadRequest)
-        {
-            Content = new StringContent("Cannot run this function under 'anonymous' auth level. Change auth level to 'function' or 'admin'.", Encoding.UTF8, "application/json")
         };
     }
 
@@ -191,81 +119,6 @@ public static async Task<string> GetToken(string resource, string apiversion, st
     return tokenPayload;
 }
 
-// For anonymous functions only:
-// - When an anonymous GetToken instance is called the first time, this method is called.
-// - Initializes the function app with a function key supplied in the FUNCTION_APP_CUSTOM_FUNCTION_KEY app setting and changes the auth level from anonymous to function.
-// - This is used when it is desired to provide a GetToken endpoint protected by function auth level with the function code supplied by the ARM deployment template.
-// - If finally sets the IS_FUNCTION_APP_INITIALIZED app setting to "1".
-public static async Task<bool> Initialize(string authorizationToken, string functionKey, string functionAppFolder, TraceWriter log)
-{
-    string functionAppName = Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME");
-    string functionAppHostName = $"{functionAppName}.azurewebsites.net";
-    string functionAppKuduHostName = $"{functionAppName}.scm.azurewebsites.net";
-    string functionName = "GetToken";
-    string keyName = $"{functionName}{new Random().Next(100000, 999999)}";
-
-    log.Info($"Function App Host Name={functionAppHostName}");
-    log.Info($"Function App Kudu Host Name={functionAppKuduHostName}");
-
-    // Get publishing credentials from the publish XML:
-    string publishXmlUrl = ConfigurationManager.AppSettings["PUBLISH_XML_URL"];
-    if (string.IsNullOrWhiteSpace(publishXmlUrl))
-    {
-        throw new Exception($"Initialization failed. Publish XML app setting was not found. Check the function deployment script.");
-    }
-
-    log.Info($"Publish XML URL={publishXmlUrl}");
-    var response = await InvokeRestMethodAsync(publishXmlUrl, log, HttpMethod.Post, null, authorizationToken);
-    //log.Info($"Publish Profile (XML)={response}");
-    
-    dynamic publishXmlAsJson = JsonConvert.DeserializeObject(XmlToJson(response));
-    //log.Info($"Publish Profile (JSON)={publishXmlAsJson}");
-    
-    string userName = publishXmlAsJson.publishData.publishProfile[0].@userName;
-    string password = publishXmlAsJson.publishData.publishProfile[0].@userPWD;
-    if (string.IsNullOrWhiteSpace(userName) || string.IsNullOrWhiteSpace(password))
-    {
-        throw new Exception($"Initialization failed. Publish XML username or password not found.");
-    }
-
-    log.Info($"Publish XML userName={userName}");
-
-    // Get the function app JWT auth token from admin endpoint.
-    var basicAuthCode = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{userName}:{password}"));    
-    string adminTokenUrl = $"https://{functionAppKuduHostName}/api/functions/admin/token";
-    log.Info($"Admin Token URL={adminTokenUrl}");
-
-    var functionAuthToken = await InvokeRestMethodAsync(adminTokenUrl, log, HttpMethod.Get, null, basicAuthCode, "Basic");
-    if (string.IsNullOrWhiteSpace(functionAuthToken))
-    {
-        throw new Exception($"Initialization failed. Could not get the auth token from the admin endpoint.");
-    }
-
-    //log.Info($"Function Auth Token (original)={functionAuthToken}");
-    var sanitizedFunctionAuthToken = functionAuthToken.Trim('"');
-    //log.Info($"Function Auth Token (sanitized)={sanitizedFunctionAuthToken}");
-
-    // Create the function key.
-    string adminUrl = $"https://{functionAppHostName}/admin/functions/{functionName}/keys/{keyName}";
-    log.Info($"Admin URL={adminUrl}");
-
-    var functionKeyPayload = new FunctionKey() { name = keyName, value = functionKey };
-    var jsonPayload = JsonConvert.SerializeObject(functionKeyPayload, Newtonsoft.Json.Formatting.Indented);
-    //log.Info($"Create Function Key JSON Payload={jsonPayload}");
-
-    var functionKeyCreationResponse = await InvokeRestMethodAsync(adminUrl, log, HttpMethod.Put, jsonPayload, sanitizedFunctionAuthToken);
-    //log.Info($"Create Function Key Response={functionKeyCreationResponse}");
-
-    // Set Auth Level to "Function":
-    SetFunctionAuthLevelToFunction(functionAppFolder, log);
-
-    // Set IS_FUNCTION_APP_INITIALIZED app setting to "1".
-    ConfigurationManager.AppSettings["IS_FUNCTION_APP_INITIALIZED"] = "1";
-
-    // Initialization succeeded!
-    return true;
-}
-
 public static async Task<string> InvokeRestMethodAsync(string url, TraceWriter log, HttpMethod httpMethod, string body = null, string authorizationToken = null, string authorizationScheme = "Bearer", IDictionary<string, string> headers = null)
 {
     HttpClient client = new HttpClient();
@@ -303,72 +156,10 @@ public static async Task<string> InvokeRestMethodAsync(string url, TraceWriter l
     throw new Exception($"Status Code: {statusCodeName} ({statusCodeValue}). Body: {content}");
 }
 
-public static string XmlToJson(string xml)
-{
-    XmlDocument xmlDocument = new XmlDocument();
-    xmlDocument.LoadXml(xml);
-
-    // Source: https://stackoverflow.com/questions/7278577/json-net-and-replacing-sign-in-xml-to-json-converstion
-    // Process to change the default behavior of the JSON.Net converter that prefixes key names with 
-    // the @ sign when calling using JsonConvert.SerializeXmlNode(xmlDocument).
-    var builder = new StringBuilder();
-    JsonSerializer.Create().Serialize(new CustomJsonWriter(new StringWriter(builder)), xmlDocument);
-    return builder.ToString();
-}
-
-public static void SetFunctionAuthLevelToFunction(string functionAppFolder, TraceWriter log)
-{
-    string filePath = Path.Combine(functionAppFolder, @"function.json");
-    log.Info($"function.json file path: {filePath}.");
-    string functionMetadataFileContents = File.ReadAllText(filePath);
-    dynamic functionMetadata = JsonConvert.DeserializeObject(functionMetadataFileContents);
-    string authLevel = functionMetadata.bindings[0].authLevel;
-    log.Info($"Current Auth Level: {authLevel}.");
-    functionMetadata.bindings[0].authLevel = "function";
-    string newFunctionMetadataFileContents = JsonConvert.SerializeObject(functionMetadata, Newtonsoft.Json.Formatting.Indented);
-    File.WriteAllText(filePath, newFunctionMetadataFileContents);
-}
-
-public static bool IsAnonymousFunctionAuthLevel(string functionAppFolder, TraceWriter log)
-{
-    log.Info("Checking if auth level in function.json is anonymous.");
-    string filePath = Path.Combine(functionAppFolder, @"function.json");
-    log.Info($"function.json file path: {filePath}.");
-    string functionMetadataFileContents = File.ReadAllText(filePath);
-    dynamic functionMetadata = JsonConvert.DeserializeObject(functionMetadataFileContents);
-    string authLevel = functionMetadata.bindings[0].authLevel;
-    log.Info($"Function Auth Level: {authLevel}.");
-    return (authLevel.ToLower() == "anonymous");
-}
-
 public class Token
 {
     public string access_token { get; set; }
     public DateTime expires_on { get; set; }
     public string resource { get; set; }
     public string token_type { get; set; }
-}
-
-public class FunctionKey
-{
-    public string name;
-    public string value;
-}
-
-// Source: https://stackoverflow.com/questions/7278577/json-net-and-replacing-sign-in-xml-to-json-converstion
-public class CustomJsonWriter : JsonTextWriter
-{
-    public CustomJsonWriter(TextWriter writer): base(writer){}
-
-    public override void WritePropertyName(string name)
-    {
-        if (name.StartsWith("@") || name.StartsWith("#"))
-        {
-            base.WritePropertyName(name.Substring(1));
-        }
-        else
-        {
-            base.WritePropertyName(name);
-        }
-    }
 }
