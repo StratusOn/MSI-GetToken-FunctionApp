@@ -1,0 +1,46 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "roleAssignmentId": {
+            "type": "string",
+            "metadata": {
+                "description": "The RBAC Role Assignment Id."
+            }
+        },
+        "roleAssignmentsApiVersion": {
+            "type": "string",
+            "metadata": {
+                "description": "The RBAC API version."
+            }
+        },
+        "msiApiVersion": {
+            "type": "string",
+            "metadata": {
+                "description": "The API version for MSI."
+            }
+        },
+        "functionAppIdentityResourceId": {
+            "type": "string",
+            "metadata": {
+                "description": "The Principal Id of the function app."
+            }
+        }
+    },
+    "variables": {
+        "ownerRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635')]",
+        "contributorRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
+    },
+    "resources": [
+        {
+            "apiVersion": "[parameters('roleAssignmentsApiVersion')]",
+            "name": "[parameters('roleAssignmentId')]",
+            "type": "Microsoft.Authorization/roleAssignments",
+            "properties": {
+              "roleDefinitionId": "[variables('ownerRoleDefinitionId')]",
+              "principalId": "[reference(parameters('functionAppIdentityResourceId'), parameters('msiApiVersion')).principalId]",
+              "scope": "[resourceGroup().id]"
+            }
+          }
+    ]
+}

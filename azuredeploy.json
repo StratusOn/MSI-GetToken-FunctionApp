@@ -9,23 +9,37 @@
         "functionAppName": {
             "type": "string",
             "defaultValue": "[concat('func',uniqueString(resourceGroup().id, deployment().name))]"
+        },
+        "artifactsBaseUrl": {
+            "type": "string",
+            "metadata": {
+                "artifactsBaseUrl": "The base URL of the ARM Template's resources (child templates and supporting VM extension scripts). For Azure Marketplace gallery packages, this value is passed by the Azure portal."
+            },
+            "defaultValue": "https://raw.githubusercontent.com/StratusOn/MSI-GetToken-FunctionApp/master"
+        },
+        "artifactsBaseUrlSasToken": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The SAS token (including the leading '?') if artifactsBaseUrl represents an Azure Storage account. The SAS token should be setup to have at least read on the blob or read+list on the container."
+            },
+            "defaultValue": ""
         }
     },
     "variables": {
         "functionName": "GetToken",
+        "createFunctionAppUrl": "[concat(parameters('artifactsBaseUrl'), '/createFunctionApp.json', parameters('artifactsBaseUrlSasToken'))]",
+        "applyRbacUrl": "[concat(parameters('artifactsBaseUrl'), '/applyRBAC.json', parameters('artifactsBaseUrlSasToken'))]",
         "uniqueSuffix": "[uniqueString(resourceGroup().id, deployment().name)]",
         "storageAccountName": "[concat('stor', variables('uniqueSuffix'))]",
         "hostingPlanName": "[concat('plan', variables('uniqueSuffix'))]",
         "roleAssignmentId": "[guid(resourceGroup().id, deployment().name)]",
-        "ownerRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635')]",
-        "contributorRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
-        "functionAppIdentityResourceId" : "[concat(resourceId('Microsoft.Web/sites', parameters('functionAppName')),'/providers/Microsoft.ManagedIdentity/Identities/default')]",
-        "functionMainScriptBody": "/*\r\n* Function: GetToken\r\n* Created: 4030 B.C.\r\n* Created By: Ra\r\n* Description:\r\n  A helper function for getting an bearer access token that can be used in AAD-based API calls\r\n  to Azure resources or Azure Resource Manager (ARM) functionality.\r\n* Usage:\r\n  1) Get the access token (Token string in the response body):\r\n     https://{function-name}.azurewebsites.net/api/GetToken?code={API-code}\r\n  2) Get the access token and other information (JSON in the response body):\r\n     https://{function-name}.azurewebsites.net/api/GetToken?showdetails&code={API-code}\r\n\r\n     The above 2 examples get an access token for the https://management.azure.com resource.\r\n  3) Get the access token for a specific resource (Token string in the response body):\r\n     https://{function-name}.azurewebsites.net/api/GetToken?msiresource=https://rest.media.azure.net&code={API-code}\r\n\r\n     This gets an access token that can be used for Azure Media Services (AMS) API calls.\r\n\r\n* Background:\r\n  To enable MSI on the Function App:\r\n  https://docs.microsoft.com/en-us/azure/app-service/app-service-managed-service-identity\r\n*/\r\n\r\n#r \"Newtonsoft.Json\"\r\n\r\nusing System.Configuration;\r\nusing System.Net;\r\nusing System.Net.Http;\r\nusing System.Net.Http.Headers;\r\nusing System.Text;\r\nusing System.Xml;\r\nusing Newtonsoft.Json;\r\n\r\nconst string DefaultResource = \"https://management.azure.com/\";\r\nconst string MsiApiVersion = \"2017-09-01\";\r\n\r\npublic static async Task<HttpResponseMessage> Run(HttpRequestMessage req, TraceWriter log, ExecutionContext context)\r\n{\r\n    log.Info(\"GetToken C# HTTP trigger function processed a request.\");\r\n\r\n    // Do nothing if this a warmup call.\r\n    if (req.GetQueryNameValuePairs().Any(q => string.Compare(q.Key, \"iswarmup\", true) == 0))\r\n    {\r\n        log.Info(\"Processed a warmup request.\");\r\n        return new HttpResponseMessage(HttpStatusCode.OK);\r\n    }\r\n\r\n    // Validate that MSI is enabled.\r\n    string msiEndpoint = Environment.GetEnvironmentVariable(\"MSI_ENDPOINT\");\r\n    string msiSecret = Environment.GetEnvironmentVariable(\"MSI_SECRET\");\r\n    if (string.IsNullOrWhiteSpace(msiEndpoint) || string.IsNullOrWhiteSpace(msiSecret))\r\n    {\r\n        return new HttpResponseMessage(HttpStatusCode.BadRequest)\r\n        {\r\n            Content = new StringContent(\"MSI is not enabled. If MSI was just enabled, make sure to restart the function before trying again.\", Encoding.UTF8, \"application/json\")\r\n        };\r\n    }\r\n\r\n    // See if a resource is specified as a query parameter. If not, use default resource.\r\n    // Examples: AMS: https://rest.media.azure.net\r\n    string msiResource = req.GetQueryNameValuePairs().FirstOrDefault(q => string.Compare(q.Key, \"msiresource\", true) == 0).Value;\r\n    msiResource = msiResource ?? DefaultResource;\r\n    bool showDetails = req.GetQueryNameValuePairs().Any(q => string.Compare(q.Key, \"showdetails\", true) == 0);\r\n\r\n    try\r\n    {\r\n        string token = await GetToken(msiResource, MsiApiVersion, msiEndpoint, msiSecret, log);\r\n        if (string.IsNullOrWhiteSpace(token))\r\n        {\r\n            return new HttpResponseMessage(HttpStatusCode.BadRequest)\r\n            {\r\n                Content = new StringContent(\"Failed to get a token.\", Encoding.UTF8, \"application/json\")\r\n            };\r\n        }\r\n        else\r\n        {\r\n            HttpContent content = null;\r\n            if (showDetails)\r\n            {\r\n                content = new StringContent(token, Encoding.UTF8, \"application/json\");\r\n            }\r\n            else\r\n            {\r\n                string accessToken = JsonConvert.DeserializeObject<Token>(token).access_token;\r\n                content = new StringContent(accessToken, Encoding.UTF8, \"application/json\");\r\n            }\r\n\r\n            return new HttpResponseMessage(HttpStatusCode.OK)\r\n            {\r\n                Content = content\r\n            };\r\n        }\r\n    }\r\n    catch (Exception ex)\r\n    {\r\n            return new HttpResponseMessage(HttpStatusCode.BadRequest)\r\n            {\r\n                Content = new StringContent($\"Failed to get a token. Exception: {ex.Message}\", Encoding.UTF8, \"application/json\")\r\n            };\r\n    }\r\n}\r\n\r\n// Returns a JSON string of the form (see Token class definition):\r\n// {\"access_token\":\"eyJ0...s1DZw\",\"expires_on\":\"12/12/2017 10:20:00 AM +00:00\",\"resource\":\"https://management.azure.com\",\"token_type\":\"Bearer\"}\r\n// Bearer tokens returned are typically valid for only 1 hour.\r\npublic static async Task<string> GetToken(string resource, string apiversion, string msiEndpoint, string msiSecret, TraceWriter log)\r\n{\r\n    string msiUrl = $\"{msiEndpoint}?resource={resource}&api-version={apiversion}\";\r\n    log.Info($\"MSI Endpoint={msiEndpoint}\");\r\n    //log.Info($\"MSI secret={msiSecret}\");\r\n    log.Info($\"MSI Url={msiUrl}\");\r\n\r\n    var headers = new Dictionary<string, string>();\r\n    headers.Add(\"Secret\", msiSecret);\r\n    var tokenPayload = await InvokeRestMethodAsync(msiUrl, log, HttpMethod.Get, null, null, null, headers);\r\n    log.Info($\"Token Payload={tokenPayload}\");\r\n\r\n    return tokenPayload;\r\n}\r\n\r\npublic static async Task<string> InvokeRestMethodAsync(string url, TraceWriter log, HttpMethod httpMethod, string body = null, string authorizationToken = null, string authorizationScheme = \"Bearer\", IDictionary<string, string> headers = null)\r\n{\r\n    HttpClient client = new HttpClient();\r\n    if (!string.IsNullOrWhiteSpace(authorizationToken))\r\n    {\r\n        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(authorizationScheme, authorizationToken);\r\n        log.Info($\"Authorization: {client.DefaultRequestHeaders.Authorization.Parameter}\");\r\n    }\r\n    \r\n    HttpRequestMessage request = new HttpRequestMessage(httpMethod, url);\r\n    if (headers != null && headers.Count > 0)\r\n    {\r\n        foreach (var header in headers)\r\n        {\r\n            request.Headers.Add(header.Key, header.Value);\r\n        }\r\n    }\r\n\r\n    if (!string.IsNullOrWhiteSpace(body))\r\n    {\r\n        request.Content = new StringContent(body, Encoding.UTF8, \"application/json\");\r\n    }\r\n\r\n    HttpResponseMessage response = await client.SendAsync(request);\r\n    if (response.IsSuccessStatusCode)\r\n    {\r\n        return await response.Content.ReadAsStringAsync();\r\n    }\r\n\r\n    string statusCodeName = response.StatusCode.ToString();\r\n    int statusCodeValue = (int)response.StatusCode;\r\n    string content = await response.Content.ReadAsStringAsync();\r\n    log.Info($\"Status Code: {statusCodeName} ({statusCodeValue}). Body: {content}\");\r\n\r\n    throw new Exception($\"Status Code: {statusCodeName} ({statusCodeValue}). Body: {content}\");\r\n}\r\n\r\npublic class Token\r\n{\r\n    public string access_token { get; set; }\r\n    public DateTime expires_on { get; set; }\r\n    public string resource { get; set; }\r\n    public string token_type { get; set; }\r\n}\r\n",
+        "functionAppIdentityResourceId": "[concat(resourceId('Microsoft.Web/sites', parameters('functionAppName')),'/providers/Microsoft.ManagedIdentity/Identities/default')]",
         "storageApiVersion": "2016-12-01",
         "appServiceApiVersion": "2016-08-01",
         "hostingPlanApiVersion": "2016-09-01",
-        "roleAssignmentsApiVersion":"2016-07-01",
-        "msiApiVersion": "2015-08-31-PREVIEW"
+        "roleAssignmentsApiVersion": "2016-07-01",
+        "msiApiVersion": "2015-08-31-PREVIEW",
+        "deploymentsApiVersion": "2016-09-01"
     },
     "resources": [
         {
@@ -39,135 +53,96 @@
             }
         },
         {
-            "type": "Microsoft.Web/serverfarms",
-            "apiVersion": "[variables('hostingPlanApiVersion')]",
-            "name": "[variables('hostingPlanName')]",
-            "location": "[parameters('location')]",
-            "properties": {
-                "name": "[variables('hostingPlanName')]",
-                "computeMode": "Shared",
-                "kind": "functionapp"
-            },
-            "sku": {
-              "name": "Y1",
-              "tier": "Dynamic",
-              "size": "Y1",
-              "family": "Y",
-              "capacity": 0
-            }
-        },
-        {
-            "apiVersion": "[variables('appServiceApiVersion')]",
-            "name": "[parameters('functionAppName')]",
-            "type": "Microsoft.Web/sites",
-            "location": "[parameters('location')]",
-            "kind": "functionapp",
+            "name": "createFunctionApp",
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "[variables('deploymentsApiVersion')]",
             "dependsOn": [
-                "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
                 "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
             ],
-            "identity": {
-                "type": "SystemAssigned"
-            },
             "properties": {
-                "name": "[parameters('functionAppName')]",
-                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
-                "siteConfig": {
-                    "appSettings": [
-                        {
-                            "name": "AzureWebJobsDashboard",
-                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).keys[0].value)]"
-                        },
-                        {
-                            "name": "AzureWebJobsStorage",
-                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).keys[0].value)]"
-                        },
-                        {
-                            "name": "FUNCTIONS_EXTENSION_VERSION",
-                            "value": "~1"
-                        },
-                        {
-                            "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
-                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('storageAccountName'),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageApiVersion')).keys[0].value)]"
-                        },
-                        {
-                            "name": "WEBSITE_CONTENTSHARE",
-                            "value": "[concat(toLower(parameters('functionAppName')), '6d6f6a616c6c')]"
-                        },
-                        {
-                            "name": "WEBSITE_NODE_DEFAULT_VERSION",
-                            "value": "6.5.0"
-                        },
-                        {
-                            "name": "WEBSITE_USE_PLACEHOLDER",
-                            "value": "0"
-                        }
-                    ]
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('createFunctionAppUrl')]",
+                    "contentVersion": "1.0.0.0"
                 },
-                "clientAffinityEnabled": false
-            }
-        },
-        {
-            "apiVersion": "[variables('appServiceApiVersion')]",
-            "name": "[concat(parameters('functionAppName'), '/', variables('functionName'))]",
-            "type": "Microsoft.Web/sites/functions",
-            "dependsOn": [
-                "[resourceId('Microsoft.Web/Sites', parameters('functionAppName'))]"
-            ],
-            "properties": {
-                "config": {
-                    "bindings": [{
-                        "name": "req",
-                        "authLevel": "function",
-                        "direction": "in",
-                        "type": "httpTrigger"
-                    }, {
-                        "name": "res",
-                        "direction": "out",
-                        "type": "http"
-                    }],
-                    "disabled": false
-                },
-                "files": {
-                    "run.csx": "[variables('functionMainScriptBody')]"
+                "parameters": {
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "storageAccountName": {
+                        "value": "[variables('storageAccountName')]"
+                    },
+                    "hostingPlanName": {
+                        "value": "[variables('hostingPlanName')]"
+                    },
+                    "functionAppName": {
+                        "value": "[parameters('functionAppName')]"
+                    },
+                    "functionName": {
+                        "value": "[variables('functionName')]"
+                    },
+                    "storageApiVersion": {
+                        "value": "[variables('storageApiVersion')]"
+                    },
+                    "appServiceApiVersion": {
+                        "value": "[variables('appServiceApiVersion')]"
+                    },
+                    "hostingPlanApiVersion": {
+                        "value": "[variables('hostingPlanApiVersion')]"
+                    }
                 }
             }
         },
         {
-            "apiVersion": "[variables('roleAssignmentsApiVersion')]",
-            "name": "[variables('roleAssignmentId')]",
-            "type": "Microsoft.Authorization/roleAssignments",
+            "name": "applyRbac",
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "[variables('deploymentsApiVersion')]",
             "dependsOn": [
-                "[resourceId('Microsoft.Web/Sites', parameters('functionAppName'))]",
-                "[resourceId('Microsoft.Web/Sites/functions', parameters('functionAppName'), variables('functionName'))]"
+                "Microsoft.Resources/deployments/createFunctionApp"
             ],
             "properties": {
-              "roleDefinitionId": "[variables('ownerRoleDefinitionId')]",
-              "principalId": "[reference(variables('functionAppIdentityResourceId'), variables('msiApiVersion')).principalId]",
-              "scope": "[resourceGroup().id]"
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('applyRbacUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "roleAssignmentId": {
+                        "value": "[variables('roleAssignmentId')]"
+                    },
+                    "roleAssignmentsApiVersion": {
+                        "value": "[variables('roleAssignmentsApiVersion')]"
+                    },
+                    "functionAppIdentityResourceId": {
+                        "value": "[variables('functionAppIdentityResourceId')]"
+                    },
+                    "msiApiVersion": {
+                        "value": "[variables('msiApiVersion')]"
+                    }
+                }
             }
-          }
+        }
     ],
     "outputs": {
         "getDefaultTokenEndpoint": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?code=', listsecrets(resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), variables('functionName')), variables('appServiceApiVersion')).key)]"
+            "value": "[reference('Microsoft.Resources/deployments/createFunctionApp', variables('deploymentsApiVersion')).outputs.getDefaultTokenEndpoint.value]"
         },
         "getAMSTokenEndpoint": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?msiresource=https://rest.media.azure.net&code=', listsecrets(resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), variables('functionName')), variables('appServiceApiVersion')).key)]"
+            "value": "[reference('Microsoft.Resources/deployments/createFunctionApp', variables('deploymentsApiVersion')).outputs.getAMSTokenEndpoint.value]"
         },
         "getDefaultTokenEndpointWithDetails": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?showdetails&code=', listsecrets(resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), variables('functionName')), variables('appServiceApiVersion')).key)]"
+            "value": "[reference('Microsoft.Resources/deployments/createFunctionApp', variables('deploymentsApiVersion')).outputs.getDefaultTokenEndpointWithDetails.value]"
         },
         "getAMSTokenEndpointWithDetails": {
             "type": "string",
-            "value": "[concat('https://', parameters('functionAppName'), '.azurewebsites.net/api/GetToken?msiresource=https://rest.media.azure.net&showdetails&code=', listsecrets(resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), variables('functionName')), variables('appServiceApiVersion')).key)]"
+            "value": "[reference('Microsoft.Resources/deployments/createFunctionApp', variables('deploymentsApiVersion')).outputs.getAMSTokenEndpointWithDetails.value]"
         },
         "functionTriggerUrl": {
             "type": "string",
-            "value": "[listsecrets(resourceId('Microsoft.Web/sites/functions', parameters('functionAppName'), variables('functionName')), variables('appServiceApiVersion')).trigger_url]"
+            "value": "[reference('Microsoft.Resources/deployments/createFunctionApp', variables('deploymentsApiVersion')).outputs.functionTriggerUrl.value]"
         }
     }
 }
