@@ -4,11 +4,17 @@
     "parameters": {
         "location": {
             "type": "string",
-            "defaultValue": "[resourceGroup().location]"
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "The location of the resources (Azure region)"
+            }
         },
         "functionAppName": {
             "type": "string",
-            "defaultValue": "[concat('func',uniqueString(resourceGroup().id, deployment().name))]"
+            "defaultValue": "[concat('func',uniqueString(resourceGroup().id, deployment().name))]",
+            "metadata": {
+                "description": "The name to be given to the Azure Function App where the GetToken function will reside."
+            }
         },
         "artifactsBaseUrl": {
             "type": "string",
@@ -143,6 +149,14 @@
         "functionTriggerUrl": {
             "type": "string",
             "value": "[reference('Microsoft.Resources/deployments/createFunctionApp', variables('deploymentsApiVersion')).outputs.functionTriggerUrl.value]"
+        },
+        "storageAccount": {
+            "type": "string",
+            "value": "[variables('storageAccountName')]"
+        },
+        "hostingPlanName": {
+            "type": "string",
+            "value": "[variables('hostingPlanName')]"
         }
     }
 }
