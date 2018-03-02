@@ -157,6 +157,14 @@
         "hostingPlanName": {
             "type": "string",
             "value": "[variables('hostingPlanName')]"
+        },
+        "functionAppIdentityResourceId": {
+            "type": "string",
+            "value": "[variables('functionAppIdentityResourceId')]"
+        },
+        "msiIdentity": {
+            "type": "object",
+            "value": "[reference('Microsoft.Resources/deployments/applyRbac', variables('deploymentsApiVersion')).outputs.msiIdentity.value]"
         }
     }
 }
