@@ -42,5 +42,11 @@
               "scope": "[resourceGroup().id]"
             }
           }
-    ]
+    ],
+    "outputs": {
+        "msiIdentity": {
+            "type": "object",
+            "value": "[reference(parameters('functionAppIdentityResourceId'), parameters('msiApiVersion'))]"
+        }
+    }
 }
