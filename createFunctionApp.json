@@ -39,10 +39,6 @@
             "apiVersion": "[parameters('hostingPlanApiVersion')]",
             "name": "[parameters('hostingPlanName')]",
             "location": "[parameters('location')]",
-            "tags": {
-                "displayName": "AppServicePlan",
-                "applicationName": "MSITokenFunctionApp"
-            },
             "properties": {
                 "name": "[parameters('hostingPlanName')]",
                 "computeMode": "Shared",
@@ -62,10 +58,6 @@
             "type": "Microsoft.Web/sites",
             "location": "[parameters('location')]",
             "kind": "functionapp",
-            "tags": {
-                "displayName": "TokenFunctionApp",
-                "applicationName": "MSITokenFunctionApp"
-            },
             "dependsOn": [
                 "[resourceId('Microsoft.Web/serverfarms', parameters('hostingPlanName'))]"
             ],
@@ -114,10 +106,6 @@
             "apiVersion": "[parameters('appServiceApiVersion')]",
             "name": "[concat(parameters('functionAppName'), '/', parameters('functionName'))]",
             "type": "Microsoft.Web/sites/functions",
-            "tags": {
-                "displayName": "TokenFunction",
-                "applicationName": "MSITokenFunctionApp"
-            },
             "dependsOn": [
                 "[resourceId('Microsoft.Web/Sites', parameters('functionAppName'))]"
             ],

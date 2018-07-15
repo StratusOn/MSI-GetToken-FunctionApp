@@ -25,19 +25,11 @@
             "metadata": {
                 "description": "The Principal Id of the function app."
             }
-        },
-        "roleDefinitionId": {
-            "type": "string",
-            "defaultValue": "",
-            "metadata": {
-                "description": "The Role Definition Id that corresponds to the RBAC role (Owner, Contributor, Reader, custom) to be assigned to the principal id of the function app over the scope of the current resource group. If empty (default and legacy behavior), Owner role is assigned. See https://docs.microsoft.com/en-us/azure/role-based-access-control/built-in-roles for details."
-            }
         }
     },
     "variables": {
         "ownerRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635')]",
-        "contributorRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
-        "readerRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')]"
+        "contributorRoleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
     },
     "resources": [
         {
@@ -45,7 +37,7 @@
             "name": "[parameters('roleAssignmentId')]",
             "type": "Microsoft.Authorization/roleAssignments",
             "properties": {
-              "roleDefinitionId": "[if(equals(parameters('roleDefinitionId'), ''),variables('ownerRoleDefinitionId'),parameters('roleDefinitionId'))]",
+              "roleDefinitionId": "[variables('ownerRoleDefinitionId')]",
               "principalId": "[reference(parameters('functionAppIdentityResourceId'), parameters('msiApiVersion')).principalId]",
               "scope": "[resourceGroup().id]"
             }
