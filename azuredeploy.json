@@ -16,6 +16,30 @@
                 "description": "The name to be given to the Azure Function App where the GetToken function will reside."
             }
         },
+        "roleName": {
+            "type": "object",
+            "defaultValue": {
+                "name": "Owner",
+                "id": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+            },
+            "allowedValues": [
+                {
+                    "name": "Owner",
+                    "id": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+                },
+                {
+                    "name": "Contributor",
+                    "id": "b24988ac-6180-42a0-ab88-20f7382dd24c"
+                },
+                {
+                    "name": "Reader",
+                    "id": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+                }
+            ],
+            "metadata": {
+                "description": "One of the 3 most common built-in roles (Owner, Contributor, Reader) to be assigned to the principal id of the function app over the scope of the current resource group. Other built-in roles or a custom role can be added to the allowedValues list by editing the template. Use https://docs.microsoft.com/en-us/azure/role-based-access-control/built-in-roles as a reference for figuring out the ids for built-in roles."
+            }
+        },
         "artifactsBaseUrl": {
             "type": "string",
             "metadata": {
@@ -40,6 +64,7 @@
         "hostingPlanName": "[concat('plan', variables('uniqueSuffix'))]",
         "roleAssignmentId": "[guid(resourceGroup().id, deployment().name)]",
         "functionAppIdentityResourceId": "[concat(resourceId('Microsoft.Web/sites', parameters('functionAppName')),'/providers/Microsoft.ManagedIdentity/Identities/default')]",
+        "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', parameters('roleName').id)]",
         "storageApiVersion": "2016-12-01",
         "appServiceApiVersion": "2016-08-01",
         "hostingPlanApiVersion": "2016-09-01",
@@ -56,6 +81,10 @@
             "kind": "Storage",
             "sku": {
                 "name": "Standard_LRS"
+            },
+            "tags": {
+                "displayName": "FunctionsStorageAccount",
+                "applicationName": "MSITokenFunctionApp"
             }
         },
         {
@@ -119,11 +148,14 @@
                     "roleAssignmentsApiVersion": {
                         "value": "[variables('roleAssignmentsApiVersion')]"
                     },
+                    "msiApiVersion": {
+                        "value": "[variables('msiApiVersion')]"
+                    },
                     "functionAppIdentityResourceId": {
                         "value": "[variables('functionAppIdentityResourceId')]"
                     },
-                    "msiApiVersion": {
-                        "value": "[variables('msiApiVersion')]"
+                    "roleDefinitionId": {
+                        "value": "[variables('roleDefinitionId')]"
                     }
                 }
             }
